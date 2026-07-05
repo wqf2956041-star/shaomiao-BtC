@@ -2470,6 +2470,36 @@ SEARCH_FAST = SEARCH_DEEP[:15]
 # ═══════ 密钥正则 — 精准匹配(含上下文验证) ═══════
 # 分两步: 1) 正则提取 2) classify_key 精确归类 + 曲线验证
 # 策略：优先匹配高价值目标（私钥 > 助记词 > keystore > 地址）
+# ═══════ 加密货币密钥正则 ═══════
+CRYPTO_REGEX = re.compile(
+    # ETH 私钥 (0x + 64 hex chars)
+    r'0x[a-fA-F0-9]{64}'
+    # BTC WIF 私钥 (base58, 51-52 chars starting with 5/K/L)
+    r'|5[KL][1-9A-HJ-NP-Za-km-z]{49,50}'
+    # BIP39 助记词 (12/18/24 words)
+    r'|(?:^|(?<=[\n\r\s]))(?:[a-z]+ ){11}[a-z]+(?:\n|\r|\s|$)'
+    # SOL 私钥 JSON 数组
+    r'|\[\s*\d+\s*(?:,\s*\d+\s*){63}\]'
+    # Keystore 文件
+    r'|\{"address":"[a-fA-F0-9]{40}","crypto":'
+)
+
+# ═══════ 高价值 AI 密钥正则 ═══════
+HIGH_VALUE_REGEX = re.compile(
+    r'sk-ant-[A-Za-z0-9_-]{40,}'                              # Anthropic Claude
+    r'|sk-proj-\w{60,}'                                       # OpenAI Pro
+    r'|sk-svcacct-\w{60,}'                                    # OpenAI Service
+    r'|sk-admin-\w{40,}'                                       # OpenAI Admin
+    r'|AIza[0-9A-Za-z_-]{35,}'                                 # Google Gemini
+    r'|gemini-[0-9A-Za-z]{30,}'                                # Gemini API Key
+    r'|nvapi-[0-9a-fA-F-]{30,}'                                # NVIDIA API
+    r'|gsk_[A-Za-z0-9_-]{30,}'                                 # Groq
+    r'|hf_[A-Za-z0-9]{30,}'                                    # HuggingFace
+    r'|xai-[A-Za-z0-9]{30,}'                                   # xAI/Grok
+    r'|pplx-[A-Za-z0-9]{30,}'                                  # Perplexity
+)
+
+# ═══════ 原始扫描正则 ═══════
 KEY_REGEX = re.compile(
     # === 1. 私钥（最高价值） ===
     # 以太坊/通用 0x + 64 hex 私钥
@@ -2494,6 +2524,30 @@ KEY_REGEX = re.compile(
     # TRC20
     r'|T[a-zA-HJ-NP-Z0-9]{33}'
 )
+
+# ═══════ 加密货币检测 ═══════
+def detect_crypto_keys(content):
+    """检测文件中的加密货币私钥/地址"""
+    results = []
+    for m in CRYPTO_REGEX.finditer(content):
+        key = m.group(0)
+        if len(key) < 20:
+            continue
+        # 分类
+        if key.startswith('0x') and len(key) == 66:
+            cat = 'ETH_PRIVATE_KEY'
+        elif key[0] in ('5', 'K', 'L') and len(key) in (51, 52):
+            cat = 'BTC_WIF'
+        elif key.startswith('[') and len(key) > 100:
+            cat = 'SOL_PRIVATE_KEY'
+        elif 'crypto' in key and 'address' in key:
+            cat = 'ETH_KEYSTORE'
+        elif len(key.split()) >= 12 and all(w.isalpha() for w in key.split()):
+            cat = 'BIP39_MNEMONIC'
+        else:
+            cat = 'CRYPTO_OTHER'
+        results.append({'key': key, 'cat': cat, 'line': content[:m.start()].count('\n') + 1})
+    return results
 
 def classify_key(key, context='', filename=''):
     """精确归类密钥 — 含 secp256k1 曲线验证 + 测试密钥过滤"""
